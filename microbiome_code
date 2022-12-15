@@ -1,0 +1,1003 @@
+##############    R Code #########
+
+library(vegan)
+library(dplyr)
+library(rcompanion)
+library(lme4)
+library(devtools)
+library(pairwiseAdonis)
+library(ggplot2)
+library(rcompanion)
+library(MASS)
+library(devtools)
+library(biom)
+library(qiimer)
+library(Tax4Fun)
+library(Matrix)
+library(phyloseq)
+library(tidyr)
+library(pheatmap)
+library(RColorBrewer)
+library(DESeq2)
+library(lmerTest)
+library(MuMIn)
+library(Lahman)
+library(nlme)
+library(plyr)
+library(car)
+library(gridExtra)
+library(lme4)
+library(tidyverse)
+library(qqplotr)
+
+## Set working directory ############# my directory
+setwd("/Users/pratimachapagain/Documents/Microbiome/muscle_yield")
+
+#trout<-read.csv("/Users/pratimachapagain/Documents/Microbiome/muscle_yield/pratima_muscle_yield_subsample_2420_shared.csv", header = T)
+data.type<-read.csv("pratima_muscle_yield_subsample_2420_shared.csv", header = T)
+
+##### create factor for yield, date and group
+yield<- as.factor(data.type$yield)
+date<- as.factor(data.type$date)
+Group<- as.factor(data.type$Group)
+tank<- as.factor(data.type$tank)
+
+
+##### Subsetting all the samples from high and low and assigned to varaible name Highmuscle_data and Lowmuscle_data
+Highmuscle_data<-subset(data.type, Group %in% c("High10", "High11", "High12", "High13", "High14", "High15", "High18", "High19", "High2", "High3", "High4", "High5", "High6", "High7", "High8", "High9"))
+
+Lowmuscle_data<-subset(data.type, Group %in% c ("Low10", "Low11", "Low12", "Low13", "Low14", "Low15", "Low16", "Low17", "Low18", "Low19", "Low2", "Low20", "Low3", "Low4", "Low5", "Low6", "Low7", "Low8", "Low9"))
+
+###### removing 6 columns from the dataset and assigned to variable Highmuscle_data.nometa and Lowmuscle_data.nometa
+Highmuscle_data.nometa<-subset(Highmuscle_data, select = -c(1:6))
+Lowmuscle_data.nometa<-subset(Lowmuscle_data, select = -c(1:6))
+
+#calculate inverse simpson diversity
+Highmuscle_data.diversity<-diversity(Highmuscle_data.nometa, index = "invsimpson")
+Lowmuscle_data.diversity<-diversity(Lowmuscle_data.nometa, index = "invsimpson")
+
+Highmuscle_Lowmuscle<-c(Highmuscle_data.diversity, Lowmuscle_data.diversity)
+hist(Highmuscle_Lowmuscle)
+shapiro.test(Highmuscle_Lowmuscle)
+#trANSFORM DATA
+T_sqrt=sqrt(Highmuscle_Lowmuscle)
+T_cub=sign(Highmuscle_Lowmuscle) * abs(Highmuscle_Lowmuscle)^(1/3)
+
+shapiro.test(T_sqrt)
+shapiro.test(T_cub)
+hist(T_cub)
+
+boxplot(Highmuscle_data.diversity, Lowmuscle_data.diversity, main = "alpha diversity", ylab = "InvSimpson Diversity", 
+        names = c("Highmuscle", "Lowmuscle"))
+
+########  Linear mixed Model to determine the effect of harvest day on microbiome prediction   ###################
+library(dplyr)
+str(data.type)
+dataotus<-select(data.type, 7:2262)
+
+#attempting to fit data to a normal distribution before using GLMM 
+#fitting cubed root transformation - not a great fit
+qqnorm(T_cub)
+qqline(T_cub)
+
+T_log<-(Highmuscle_Lowmuscle)
+#fitting log transformation - not a great fit
+hist(T_log)
+qqnorm(T_log)
+qqline(T_log)
+
+#Data fit a NORMAL distribution using a Tukey's Ladder of Powers transformation
+T_tuk <- transformTukey(Highmuscle_Lowmuscle, plotit=FALSE)
+hist(T_tuk)
+qqnorm(T_tuk)
+qqline(T_tuk)
+shapiro.test(T_tuk)
+
+# Hypothesis 1: Genetic breeding line of fish (high/low muscle yield) is predicitive of microbiome
+# Independent variables: genetic breeding line
+# Dependent variable: alpha diversity
+
+hist(T_tuk, main="Inverse Simpson", xlab="", breaks=10) #visualize distribution - looks pretty normally distributed!
+shapiro.test(T_tuk) #test for normalcy statistically - run the Shapiro-Wilk test of normality- normally distributed data
+
+boxplot(T_tuk ~ yield, col=c("white","lightgray"), dataotus) #visualize diversity by muscle yield
+### boxplot(Highmuscle_data.diversity, Lowmuscle_data.diversity, main = "alpha diversity", ylab = "InvSimpson Diversity", 
+##names = c("Highmuscle", "Lowmuscle"))
+
+
+#what probability distribution best fits our data?
+#normal distribution
+qqp(T_tuk, "norm")
+#the data are normally distributed!
+
+#run linear mixed model - random intercept model - with alpha diversity as response variable and muscle yield as explantory variable while controlling for sampling date 
+lmer2 <- lmer(T_tuk ~ yield + (1|date), data = dataotus, REML = TRUE)
+
+summary(lmer2)
+plot(lmer2)
+
+qqnorm(resid(lmer2)) 
+qqline(resid(lmer2)) #residuals fit line reasonable well - some heteroscedasticity
+
+#Likelihood is the probability of seeing the data you collected given your model.
+lmer2.null <- lmer(T_tuk ~ 1 + (1|date), data = dataotus, REML = TRUE) #create null model
+
+#compare null model to our model
+#data statistically deviate from the null
+anova(lmer2, lmer2.null)
+
+coef(lmer2)
+
+########  Beta diversity  to test if high and low genetic lines are predictive of microbiome ############
+
+High_low_muscle_trout_nometa<-subset(data.type, select = -c(1:6))
+bray.data.type<-vegdist(High_low_muscle_trout_nometa, method="bray", na.rm=TRUE)
+
+#######   to test the homogenity and dispersion of data by using betadisper function ################
+trout.dispersion<-betadisper(bray.data.type, data.type$yield )
+permutest(trout.dispersion) #no issue with dispersion of data points - good!
+plot(trout.dispersion, hull = FALSE, ellipse = T, label = T)
+
+##legend("topright", legend = c("High", "Low"), col = c("red", "black"), pch = c(1,2), pt.cex = 2.5, cex = 2)
+#bray.data.type<-vegdist(High_low_muscle_trout_nometa, method="bray", na.rm=TRUE)
+
+#permanova to test if high and low muscle yield genetic line is predictive of the microbiome
+
+#### want to control permutations for date if you are specifically interested in yield 
+trout.permanova<-adonis(bray.data.type~yield, data=data.type, permutations = 999, method='bray', strata=date)
+trout.permanova
+######## significant differences in microbiome on the basis of muscle yield genetic lines  ####################
+
+####pairwise.adonis(trout[,7:2262], trout$Group )
+#######   run NMDS and plot in ggplot2  ###########
+
+BC.nMDS = metaMDS(High_low_muscle_trout_nometa, distance="bray", k=2, trymax=1000)
+#################################
+##### stress = 0.1255 ############
+################################
+
+
+
+#Using the scores function from vegan to extract the site scores (rows) and convert to a data.frame
+data.scores<-as.data.frame(scores(BC.nMDS))
+data.scores
+# create a column of yield names, from the rownames of data.scores
+data.scores$yield<-rownames(data.scores)
+data.scores$Group<-rownames(data.scores)
+
+#  add factor data for graphing purposes 
+data.scores$yield<-yield
+data.scores$Group<-Group
+data.scores
+
+#Using the scores function from vegan to extract the species scores and convert to a data.frame
+species.scores<-as.data.frame(scores(BC.nMDS, "species"))
+
+# create a column of species, from the rownames of species.scores
+species.scores$species<-rownames(species.scores)
+
+#look at the data
+head(species.scores)
+
+f1<-ggplot()+
+  #geom_point(data=species.scores, aes(x=NMDS1, y=NMDS2), alpha=0.5)+
+  geom_point(data=data.scores, aes(x=NMDS1, y=NMDS2, shape=, color=yield), size=2)+ scale_color_manual(values = c("High" = "#7676FF", "Low" = "#FF726F"))
+  #geom_text(data=data.scores, aes(x=NMDS1, y=NMDS2, label=Group), size=3, vjust=-1)+ 
+  coord_equal()+
+  theme_bw()
+f1
+
+
+
+#########
+
+##############  Harvest day effect in microbiome  prediction##########################
+
+### Alpha and Beta diversity analysis to determine the tank effect in two genetic lines of fish  ############################################
+
+
+
+############ Subsetting all the samples from harvest  day 1 (D_21)  and day 2 (D_22)  and assigned to varaibles
+
+D_21<-subset(data.type, Group %in% c("High10", "High11", "High2", "High3", "High4", "High5", "High6", "High7", "High8", "High9", "Low10", "Low11", "Low12", "Low13",  "Low2", "Low3", "Low4", "Low5", "Low6", "Low8", "Low9"))
+
+
+
+D_22<-subset(data.type, Group %in% c("High12", "High13", "High14", "High15", "High18", "High19", "Low14", "Low15", "Low16", "Low17", "Low18", "Low19", "Low20"))
+
+
+D_21.nometa<-subset(D_21, select = -c(1:6))
+
+D_22.nometa<-subset(D_22, select = -c(1:6))
+
+
+
+
+D_21.diversity<-diversity(D_21.nometa, index = "invsimpson")
+
+D_22.diversity<-diversity(D_22.nometa, index= "invsimpson")
+
+
+
+Harvest_date.diversity<-c(D_21.diversity, D_22.diversity)
+shapiro.test(Harvest_date.diversity)
+
+type.factors= factor(rep(1:2, c(21,13)))
+
+
+aov_trout<-aov(Harvest_date.diversity ~ type.factors)
+summary(aov_trout)
+
+
+
+boxplot(D_21.diversity, D_22.diversity, main = "alpha diversity", ylab = "InvSimpson Diversity", 
+        names = c("D_21", "D_22"))
+
+
+############## Beta diversity analysis to see if tank has effect on microbiome of host #############
+
+Harvest_date<- as.factor(data.type$Harvest_date)
+Group<- as.factor(data.type$Group)
+
+Harvest_date_nometa<-subset(data.type, select = -c(1:6))
+
+
+
+bray.data.type<-vegdist(Harvest_date_nometa, method="bray", na.rm=TRUE)
+data.type.dispersion<-betadisper(bray.data.type, data.type$Harvest_date )
+
+permutest(data.type.dispersion)
+plot(data.type.dispersion, hull = FALSE, ellipse = T, label = T)
+
+legend("topright", legend = c("D_21", "D_22"), col = c("red", "black"), pch = c(1,2), pt.cex = 2.5, cex = 2)
+###### not significant means samples are Equally dispersed, i.e. no differences in dispersion       ###########
+
+
+
+data.type.permanova<-adonis(bray.data.type~Harvest_date, data=data.type, permutations = 999, method='bray')
+data.type.permanova
+##############   significant differences between the  Harvest_date  ####################
+
+###   Since we have only two groups, no need to do pairwise adonis ################
+#pairwise.adonis(data.type[,7:2262], trout$Group )
+
+BC.nMDS = metaMDS(Harvest_date_nometa, distance="bray", k=2, trymax=1000)
+
+################# STRESS=0.1255 ###########
+
+#BC.nMDS = cmdscale(Harvest_date_nometa, distance="bray", k=2, trymax=1000)
+#stressplot(Harvest_date_nometa)
+data.scores<-as.data.frame(scores(BC.nMDS))
+data.scores
+data.scores$date<-rownames(data.scores)
+data.scores$Group<-rownames(data.scores)
+data.scores$date<-Harvest_date
+data.scores$Group<-Group
+data.scores
+species.scores<-as.data.frame(scores(BC.nMDS, "species"))
+species.scores$species<-rownames(species.scores)
+head(species.scores)
+library(ggplot2)
+f1<-ggplot()+
+  #geom_point(data=species.scores, aes(x=NMDS1, y=NMDS2), alpha=0.5)+
+  geom_point(data=data.scores, aes(x=NMDS1, y=NMDS2, shape=, color=tank), size=2)+
+  #geom_text(data=data.scores, aes(x=NMDS1, y=NMDS2, label=Group), size=3, vjust=-1)+
+  coord_equal()+
+  theme_bw()
+f1
+
+#################   Harvest_date D_21 and D_22  Individual sample analysis  #############################
+
+
+####################   D_21 ######################################3
+
+data.type<-read.csv("subsample_2420_high_low_D21.csv", header = T)
+
+##### create factor for yield, date and group
+yield<- as.factor(data.type$yield)
+Group<- as.factor(data.type$Group)
+
+
+
+
+########  Beta diversity  to test if high and low genetic lines are predictive of microbiome ############
+
+High_low_muscle_trout_nometa<-subset(data.type, select = -c(1:4))
+bray.data.type<-vegdist(High_low_muscle_trout_nometa, method="bray", na.rm=TRUE)
+
+#######   to test the homogenity and dispersion of data by using betadisper function ################
+trout.dispersion<-betadisper(bray.data.type, data.type$yield )
+permutest(trout.dispersion) #no issue with dispersion of data points - good!
+plot(trout.dispersion, hull = FALSE, ellipse = T, label = T)
+
+#legend("topright", legend = c("High", "Low"), col = c("red", "black"), pch = c(1,2), pt.cex = 2.5, cex = 2)
+
+
+#permanova to test if high and low muscle yield genetic line is predictive of the microbiome
+
+#### want to control permutations for date if you are specifically interested in yield 
+trout.permanova<-adonis(bray.data.type~yield, data=data.type, permutations = 999, method='bray')
+trout.permanova
+######## significant differences in microbiome on the basis of muscle yield genetic lines  ####################
+
+
+
+BC.nMDS = metaMDS(High_low_muscle_trout_nometa, distance="bray", k=2, trymax=1000)
+#################################
+##### stress = 0.116 ############
+################################
+
+
+
+#Using the scores function from vegan to extract the site scores (rows) and convert to a data.frame
+data.scores<-as.data.frame(scores(BC.nMDS))
+data.scores
+# create a column of yield names, from the rownames of data.scores
+data.scores$yield<-rownames(data.scores)
+data.scores$Group<-rownames(data.scores)
+
+#  add factor data for graphing purposes 
+data.scores$yield<-yield
+data.scores$Group<-Group
+data.scores
+
+#Using the scores function from vegan to extract the species scores and convert to a data.frame
+species.scores<-as.data.frame(scores(BC.nMDS, "species"))
+
+# create a column of species, from the rownames of species.scores
+species.scores$species<-rownames(species.scores)
+
+#look at the data
+head(species.scores)
+
+f1<-ggplot()+
+  #geom_point(data=species.scores, aes(x=NMDS1, y=NMDS2), alpha=0.5)+
+  geom_point(data=data.scores, aes(x=NMDS1, y=NMDS2, shape=, color=yield), size=2)+
+  #geom_text(data=data.scores, aes(x=NMDS1, y=NMDS2, label=Group), size=3, vjust=-1)+
+  coord_equal()+
+  theme_bw()
+f1
+
+
+
+#####################  D_22 ##################################
+
+
+data.type<-read.csv("subsample_2420_high_low_D22.csv", header = T)
+
+##### create factor for yield, date and group
+yield<- as.factor(data.type$yield)
+Group<- as.factor(data.type$Group)
+
+
+
+
+########  Beta diversity  to test if high and low genetic lines are predictive of microbiome ############
+
+High_low_muscle_trout_nometa<-subset(data.type, select = -c(1:4))
+bray.data.type<-vegdist(High_low_muscle_trout_nometa, method="bray", na.rm=TRUE)
+
+#######   to test the homogenity and dispersion of data by using betadisper function ################
+trout.dispersion<-betadisper(bray.data.type, data.type$yield )
+permutest(trout.dispersion) #no issue with dispersion of data points - good!
+plot(trout.dispersion, hull = FALSE, ellipse = T, label = T)
+
+
+
+#permanova to test if high and low muscle yield genetic line is predictive of the microbiome
+
+#### want to control permutations for date if you are specifically interested in yield 
+trout.permanova<-adonis(bray.data.type~yield, data=data.type, permutations = 999, method='bray')
+trout.permanova
+######## significant differences in microbiome on the basis of muscle yield genetic lines  ####################
+
+
+
+BC.nMDS = metaMDS(High_low_muscle_trout_nometa, distance="bray", k=2, trymax=1000)
+#################################
+##### stress = 0.05 ############
+################################
+
+
+
+#Using the scores function from vegan to extract the site scores (rows) and convert to a data.frame
+data.scores<-as.data.frame(scores(BC.nMDS))
+data.scores
+# create a column of yield names, from the rownames of data.scores
+data.scores$yield<-rownames(data.scores)
+data.scores$Group<-rownames(data.scores)
+
+#  add factor data for graphing purposes 
+data.scores$yield<-yield
+data.scores$Group<-Group
+data.scores
+
+#Using the scores function from vegan to extract the species scores and convert to a data.frame
+species.scores<-as.data.frame(scores(BC.nMDS, "species"))
+
+# create a column of species, from the rownames of species.scores
+species.scores$species<-rownames(species.scores)
+
+#look at the data
+head(species.scores)
+
+f1<-ggplot()+
+  #geom_point(data=species.scores, aes(x=NMDS1, y=NMDS2), alpha=0.5)+
+  geom_point(data=data.scores, aes(x=NMDS2, y=NMDS1, shape=, color=yield), size=2)+
+  #geom_text(data=data.scores, aes(x=NMDS1, y=NMDS2, label=Group), size=3, vjust=-1)+
+  coord_equal()+
+  theme_bw()
+f1
+
+
+
+
+#############################    Tax4Fun Analysis ################################################################
+############################################################################################################################
+#### set working directory   ####################
+setwd("/Users/pratimachapagain/Desktop/mothur")
+#######  tax4fun uses txt file
+######### subsample.shared file converted to biom format in mothur using make.biom command,   then biom file  is 
+#####   then converted to txt file   ############
+muscle_genus<-importQIIMEData("muscle_yield_updated.txt")
+str(muscle_genus)
+#dim(muscle_genus$otu_table)
+#muscle_genus$otu_table[1:5,1:3]    
+colnames(muscle_genus$otuTable)
+# Generate KEGG ortholog list
+muscle_genus_profile<-Tax4Fun(muscle_genus,"Tax4Fun_SILVA123",fctProfiling = TRUE,refProfile = "UProC",normCopyNo = FALSE)
+str(muscle_genus_profile)
+muscle_genus_profile$FTU
+summary(muscle_genus_profile$FTU)
+
+
+
+dim(muscle_genus_profile$Tax4FunProfile)  ####### 34 rows and 6377 columns, KEGG orthologs
+muscle_genus_profile$Tax4FunProfile[1:5,1:5]
+t(muscle_genus_profile$Tax4FunProfile)[1:5,1:5]# in this output, it is KEGG ortholog count in each sample
+muscle_genus_KEGG_ortholog<-t(muscle_genus_profile$Tax4FunProfile)
+dim(muscle_genus_KEGG_ortholog) 
+write.csv(muscle_genus_KEGG_ortholog,file="updated_muscle_yield_KEGG_ortholog_rarefied.csv")
+
+
+muscle_genus_path<-Tax4Fun(muscle_genus,"Tax4Fun_SILVA123",fctProfiling = FALSE,refProfile = "UProC",normCopyNo = FALSE)
+str(muscle_genus_path)
+muscle_genus_path$FTU
+dim(muscle_genus_path$Tax4FunProfile) 
+muscle_genus_path$Tax4FunProfile[1:5,1:5]
+t(muscle_genus_path$Tax4FunProfile)[1:5,1:5]
+sum(muscle_genus_path$Tax4FunProfile[1,])
+muscle_genus_KEGG_path<-t(muscle_genus_path$Tax4FunProfile)
+write.csv(muscle_genus_KEGG_path,file = "muscle_updated_KEGG_path_rarefied.csv")
+
+
+
+
+## HAve a quick look at PCoA plot of KEGG ortholog profile and pathway file
+
+genus_KEGG_ortholog<-read.csv(file = "muscle_updated_KEGG_path_rarefied2.csv",row.names = 1)
+str(genus_KEGG_ortholog)
+dim(genus_KEGG_ortholog)
+genus_KEGG_ortholog_phy<-otu_table(as.matrix(genus_KEGG_ortholog),taxa_are_rows = TRUE)
+muscle_meta<-read.csv(file = "muscle_yield_updated_meta.csv",row.names = 1)
+genus_KEGG_ortholog_phy
+identical (rownames(muscle_meta),sample_names(genus_KEGG_ortholog_phy))
+muscle_meta_phy<-sample_data(muscle_meta)
+genus_KEGG_ortholog_phy<-phyloseq(genus_KEGG_ortholog_phy,muscle_meta_phy)
+genus_KEGG_ortholog_phy
+
+#PCoA plot
+genus_KEGG_ortholog_phy_bray<-vegdist(t(otu_table(genus_KEGG_ortholog_phy)),method="jaccard",binary = FALSE)
+genus_KEGG_ortholog_phy_PCoA<-ordinate(genus_KEGG_ortholog_phy,method = "PCoA", genus_KEGG_ortholog_phy_bray)
+
+plot_ordination(genus_KEGG_ortholog_phy, genus_KEGG_ortholog_phy_PCoA, type = "samples", axes = 1:2,
+                color = "Yield", shape = NULL, label = NULL, title = NULL,
+                justDF = FALSE)
+
+genus_KEGG_path<-read.csv(file = "muscle_updated_KEGG_path_rarefied2.csv",row.names = 1)
+dim(genus_KEGG_path)
+str(genus_KEGG_path)
+genus_KEGG_path_phy<-otu_table(as.matrix(genus_KEGG_path),taxa_are_rows = TRUE)
+muscle_meta<-read.csv(file = "muscle_yield_updated_meta.csv",row.names = 1)
+genus_KEGG_path_phy
+identical (rownames(muscle_meta),sample_names(genus_KEGG_path_phy))
+muscle_meta_phy<-sample_data(muscle_meta)
+genus_KEGG_path_phy<-phyloseq(genus_KEGG_path_phy,muscle_meta_phy)
+genus_KEGG_path_phy
+genus_KEGG_path_phy_bray<-vegdist(t(otu_table(genus_KEGG_path_phy)),method="jaccard",binary = FALSE)
+genus_KEGG_path_phy_PCoA<-ordinate(genus_KEGG_path_phy,method = "PCoA",genus_KEGG_path_phy_bray)
+
+plot_ordination(genus_KEGG_ortholog_phy, genus_KEGG_ortholog_phy_PCoA, type = "samples", axes = 1:2,
+                color = "Yield", shape = NULL, label = NULL, title = NULL,
+                justDF = FALSE)
+
+
+##  Gene profile and KEGG pathway analysis - rarefied and normalized
+# Generate KEGG ortholog list
+muscle_genus_profile<-Tax4Fun(muscle_genus,"Tax4Fun_SILVA123",fctProfiling = TRUE,refProfile = "UProC",normCopyNo = TRUE)
+str(muscle_genus_profile)
+genus_profile$FTU
+dim(muscle_genus_profile$Tax4FunProfile) 
+muscle_genus_profile$Tax4FunProfile[1:5,1:5]
+t(muscle_genus_profile$Tax4FunProfile)[1:5,1:5]# in this output, it is KEGG ortholog count in each sample
+muscle_genus_KEGG_ortholog<-t(muscle_genus_profile$Tax4FunProfile)
+dim(muscle_genus_KEGG_ortholog) 
+write.csv(muscle_genus_KEGG_ortholog,file="muscle_updated_genus_KEGG_ortholog_rarefied_and_norm.csv")
+
+
+muscle_genus_path<-Tax4Fun(muscle_genus,"Tax4Fun_SILVA123",fctProfiling = FALSE,refProfile = "UProC",normCopyNo = TRUE)
+str(muscle_genus_path)
+muscle_genus_path$FTU
+dim(muscle_genus_path$Tax4FunProfile) # 5 rows and 279 columns - pathways
+muscle_genus_path$Tax4FunProfile[1:5,1:5]
+t(muscle_genus_path$Tax4FunProfile)[1:5,1:5]
+sum(muscle_genus_path$Tax4FunProfile[1,])
+muscle_genus_KEGG_path<-t(muscle_genus_path$Tax4FunProfile)
+write.csv(genus_KEGG_path,file = "muscle_updated_genus_KEGG_path_rarefied_and_norm.csv")
+
+
+#HAve a quick look at PCoA plot of KEGG ortholog profile and pathway file
+
+
+muscle_genus_KEGG_ortholog<-read.csv(file = "muscle_updated_genus_KEGG_ortholog_rarefied_and_norm.csv",row.names = 1)
+str(muscle_genus_KEGG_ortholog)
+dim(muscle_genus_KEGG_ortholog)
+muscle_genus_KEGG_ortholog_phy<-otu_table(as.matrix(muscle_genus_KEGG_ortholog),taxa_are_rows = TRUE)
+muscle_meta<-read.csv(file = "muscle_yield_updated_meta.csv",row.names = 1)
+muscle_genus_KEGG_ortholog_phy
+identical (rownames(muscle_meta),sample_names(muscle_genus_KEGG_ortholog_phy))
+muscle_meta_phy<-sample_data(muscle_meta)
+muscle_genus_KEGG_ortholog_phy<-phyloseq(muscle_genus_KEGG_ortholog_phy,muscle_meta_phy)
+muscle_genus_KEGG_ortholog_phy
+
+#PCoA plot
+muscle_genus_KEGG_ortholog_phy_bray<-vegdist(t(otu_table(muscle_genus_KEGG_ortholog_phy)),method="jaccard",binary = FALSE)
+muscle_genus_KEGG_ortholog_phy_PCoA<-ordinate(muscle_genus_KEGG_ortholog_phy,method = "PCoA", muscle_genus_KEGG_ortholog_phy_bray)
+plot_ordination(genus_KEGG_ortholog_phy, genus_KEGG_ortholog_phy_PCoA, type = "samples", axes = 1:2,
+                color = "Yield", shape = NULL, label = NULL, title = NULL,
+                justDF = FALSE)
+
+## KEGG pathway
+muscle_genus_KEGG_path<-read.csv(file = "muscle_updated_genus_KEGG_path_rarefied_and_norm.csv",row.names = 1)
+dim(muscle_genus_KEGG_path)
+muscle_genus_KEGG_path[1:5,1:5]
+str(muscle_genus_KEGG_path)
+muscle_genus_KEGG_path_phy<-otu_table(as.matrix(muscle_genus_KEGG_path),taxa_are_rows = TRUE)
+muscle_meta<-read.csv(file = "muscle_yield_updated_meta.csv",row.names = 1)
+muscle_genus_KEGG_path_phy
+identical (rownames(muscle_meta),sample_names(muscle_genus_KEGG_path_phy))
+muscle_meta_phy<-sample_data(muscle_meta)
+muscle_genus_KEGG_path_phy<-phyloseq(muscle_genus_KEGG_path_phy,muscle_meta_phy)
+muscle_genus_KEGG_path_phy
+
+muscle_genus_KEGG_path_phy_bray<-vegdist(t(otu_table(muscle_genus_KEGG_path_phy)),method="jaccard",binary = FALSE)
+muscle_genus_KEGG_path_phy_PCoA<-ordinate(muscle_genus_KEGG_path_phy,method = "PCoA", muscle_genus_KEGG_path_phy_bray)
+plot_ordination(genus_KEGG_ortholog_phy, genus_KEGG_ortholog_phy_PCoA, type = "samples", axes = 1:2,
+                color = "Yield", shape = NULL, label = NULL, title = NULL,
+                justDF = FALSE)
+
+
+
+## DEseq analysis using log2fold change and wald test as well as adj p_value
+muscle_genus_KEGG_path<-read.csv(file = "muscle_updated_KEGG_path_rarefied.csv",row.names = 1)
+dim(muscle_genus_KEGG_path)
+muscle_genus_KEGG_path[1:5,1:5]
+rownames(muscle_genus_KEGG_path)<-separate(data.frame(KOlist=rownames(genus_KEGG_path)),col=KOlist,into=c("KO","Path"),sep = ";")[,2]
+muscle_genus_KEGG_path[1:5,1:5]
+muscle_meta[1:2,1:2]
+
+## Based on the comparison, subset path count and muscle_meta to corresponding samples using subset function
+# ------------High vs Low samples------------
+muscle_path<-round(as.matrix(muscle_genus_KEGG_path*1000000),digits = 0)   ######## to convert data to integer
+dim(muscle_path)
+all(colnames(muscle_path)==rownames(muscle_meta))
+library(DESeq2)
+path_ds<-DESeqDataSetFromMatrix(countData = muscle_path,
+                                colData = muscle_meta,
+                                design = ~ Yield)
+#muscle_path[0:5,0:5]
+path_ds
+#muscle_meta[0:2]
+colnames(muscle_path)
+rownames(muscle_meta)
+
+path_ds<-DESeq(path_ds,fitType = "local")
+High_vs_Low_path_res<-results(path_ds)
+High_vs_Low_path_res
+resultsNames(High_vs_Low_path_res)
+sort_High_vs_Low_path_res<-High_vs_Low_path_res[order(High_vs_Low_path_res$pvalue,na.last = NA),]
+sig_High_vs_Low_path_res<-sort_High_vs_Low_path_res[sort_High_vs_Low_path_res$padj<=0.01,]
+dim(sig_High_vs_Low_path_res)
+sig_High_vs_Low_path_res$log2FoldChange
+#sig_High_vs_Low_path_res@rownames
+sig_High_vs_Low_path_res[0:5,0:5]
+sig_High_vs_Low_path_res
+
+
+## Heatmap using only significant KEGG path  --- 
+
+all_sig_path_list<-data.frame(num=1:92,path=unique(c(sig_High_vs_Low_path_res@rownames)))
+all_sig_path_list
+rownames(all_sig_path_list)<-all_sig_path_list$path
+all_sig_path_list 
+match(rownames(all_sig_path_list),rownames(muscle_path))
+# extract pathways significantly different between muscle yield
+all_sig_path<-muscle_path[match(rownames(all_sig_path_list),rownames(muscle_path)),]
+
+#write.csv(all_sig_path,file = "KEGG_pathways_for_heatmap.csv")
+
+####  make a new csv file with interested pathways only  #############
+
+data <- read.csv ("KEGG3_pathways_for_heatmap.csv", comment.char="#")
+rnames <- data[,1]    
+mat_data <- data.matrix(data[,2:ncol(data)])
+rownames(mat_data) <- rnames 
+tiff('muscle_path_heatmap.tiff', units="in", width=18, height=14, res=300)
+muscle_path_heatmap<-pheatmap(mat_data,
+                              color = colorRampPalette(rev(brewer.pal(n = 11, name =
+                                                                        "RdYlBu")))(100),
+                              cluster_rows = TRUE,
+                              show_rownames = TRUE,
+                              cluster_cols =TRUE,
+                              annotation_col=muscle_meta[,c(1,2)], scale="row",
+                              clustering_distance_rows = 'euclidean',
+                              clustering_distance_cols = 'euclidean',
+                              border_color = NA,
+                              labels_row  = NULL,
+                              cellwidth = 10, 
+                              cellheight = 10,
+                              
+                              legend = FALSE
+)
+#muscle_path_heatmap<-pheatmap(mat_data,color = colorRampPalette(rev(brewer.pal(n = 11, name ="RdYlBu")))(100),cluster_rows = TRUE,show_rownames = TRUE,cluster_cols =TRUE,annotation_col=muscle_meta[,c(1,2)], scale="row",clustering_distance_rows = 'euclidean',clustering_distance_cols = 'euclidean',border_color = NA)
+
+
+muscle_path_heatmap<-pheatmap(mat_data,color = colorRampPalette(rev(brewer.pal(n = 11, name =
+                                                                                 "RdYlBu")))(100),cluster_rows = TRUE,show_rownames = TRUE,cluster_cols =TRUE,annotation_col=muscle_meta[,c(1,2)], scale="row",clustering_distance_rows = 'euclidean',clustering_distance_cols = 'euclidean',border_color = NA,cellwidth = 10, 
+                              cellheight = 10,)
+#########   To adjust figure legend  ################
+library(grid)
+grid.ls(grid.force())  
+grid.gedit("GRID.text.604", gp = gpar(col="white"))
+grid.gedit("GRID.rect.605", gp = gpar(fill="white"))
+grid.gedit("GRID.text.606", gp = gpar(col="white"))
+
+
+#grid.gedit("GRID.rect.427", gp = gpar(col="white"))
+#grid.gedit("GRID.text.428", gp = gpar(col="white"))
+#grid.gedit("GRID.rect.406", gp = gpar(col="white"))
+
+
+
+
+
+
+###########   Relative abundance at different levels #############
+
+
+
+
+
+
+
+
+
+library(tidyverse)
+library(dplyr)
+library(broom)
+library(purrr)
+
+library(readxl)
+get_metadata <- function() {
+  metadata <- read_csv(file="metadata1.csv")
+  metadata <- mutate(metadata, Sample = factor(Sample, levels=c("High", "Low")))
+}
+taxonomy <- read_tsv(file="191030_muscle_yield.taxonomy")%>%
+  rename_all(tolower)
+
+
+taxonomy %>%
+  mutate(taxonomy=str_replace_all(string=taxonomy, pattern="\\(\\d*\\)", replacement="")) %>%
+  filter(str_detect(taxonomy, pattern="\\(")) %>%
+  select(taxonomy)
+
+
+
+
+
+taxonomy <- read_tsv(file="191030_muscle_yield.taxonomy") %>%
+  rename_all(tolower) %>%
+  mutate(taxonomy=str_replace_all(string=taxonomy, pattern="\\(\\d*\\)", replacement="")) %>%
+  mutate(taxonomy=str_replace_all(string=taxonomy, pattern=";$", replacement="")) %>%
+  separate(taxonomy, into=c("kingdom", "phylum", "class", "order", "family", "genus"), sep=";")
+
+otu_data <- read_csv("subsample_shared_muscle_yield.csv", col_types=cols(Sample=col_character()))%>%
+  pivot_longer(cols=-Sample, names_to="otu", values_to="count")%>%
+  group_by(Sample)%>%
+  summarize(n=sum(count))%>%
+  summary()
+
+otu_data <- read_csv("subsample_shared_muscle_yield.csv", col_types=cols(Sample=col_character()))%>%
+  pivot_longer(cols=-Sample, names_to="otu", values_to="count")%>%
+  group_by(Sample)%>%
+  mutate(rel_abund=count/43560)
+
+
+agg_phylum_data <-inner_join(otu_data, taxonomy, by="otu")%>%
+  group_by(Sample, phylum)%>%
+  summarize(agg_rel_abund= sum(rel_abund))%>%
+  #inner_join(., get_metadata())%>%
+  ungroup()
+
+
+
+top_phyla <- agg_phylum_data %>%
+  group_by(phylum) %>%
+  summarize(median=median(agg_rel_abund)) %>%
+  arrange((desc(median))) %>% # keep this so that the phyla are sorted properly
+  top_n(5, median) %>%
+  pull(phylum) # use pull to convert the names from a data frame to a vector of names
+
+
+##########################################################################
+
+agg_phylum_data %>%
+  filter(phylum %in% top_phyla) %>%
+  mutate(phylum=factor(phylum, levels=top_phyla)) %>%
+  ggplot(aes(x=phylum, y=agg_rel_abund, color=Sample)) +
+  geom_boxplot() +
+  scale_color_manual(name=NULL,
+                     values=c("black", "blue"),
+                     breaks=c("High", "Low"),
+                     labels=c("High", "Low")) +
+  labs(title="There are no obvious phylum-level differences between the\ngenetic line",
+       x=NULL,
+       y="Relative abundance") +
+  theme_classic()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+agg_phylum_data %>%
+  filter(phylum %in% top_phyla) %>%
+  mutate(phylum=factor(phylum, levels=top_phyla)) %>%
+  ggplot(aes(x=phylum, y=agg_rel_abund, color=yield)) +
+  geom_boxplot(width=5, height=10) +
+  scale_color_manual(name=NULL,
+                     values=c("black", "blue"),
+                     breaks=c("High", "Low"),
+                     labels=c("High", "Low")) +
+  labs(title="There are  phylum-level differences between the\ngenetic lines",
+       x=NULL,
+       y="Relative abundance") +
+  theme_classic()
+
+
+###  For stack plot ###################
+
+library(tidyverse)
+library(RColorBrewer)
+library(colorRamps)
+#getPalette = colorRampPalette(brewer.pal(9, "Set1"))
+
+p <- ggplot(data=agg_phylum_data, aes(x=Sample, y=agg_rel_abund, fill=phylum))
+p + geom_bar(aes(), stat="identity", position="stack") + theme(legend.position="bottom") + guides(fill=guide_legend(nrow=5))
+
+### This gave me what I was looking for. Agreed that the box plot may often be a better choice.
+
+
+library(broom)
+library(purrr)
+
+phylum_tests <- agg_phylum_data %>%
+  nest(sample_data = c(-phylum)) %>%
+  mutate(test=map(sample_data, ~tidy(kruskal.test(agg_rel_abund~Sample, data=.)))) %>%
+  unnest(test)
+phylum_tests <- agg_phylum_data %>%
+  nest(sample_data = c(-phylum)) %>%
+  mutate(test=map(sample_data, ~tidy(kruskal.test(agg_rel_abund~Sample, data=.)))) %>%
+  unnest(test) %>%
+  mutate(p.value.adj=p.adjust(p.value, method="BH")) %>%
+  arrange(p.value.adj) %>%
+  
+  sig_phyla <- phylum_tests %>%
+  filter(p.value.adj <= 0.05) %>%
+  pull(phylum)
+
+
+sig_abund_deep <- agg_deep_data %>%
+  filter(taxonomy %in% sig_deep) %>%
+  group_by(taxonomy) %>%
+  summarize(mean=mean(agg_rel_abund)) %>%
+  arrange(desc(mean)) %>% pull(taxonomy)
+
+
+agg_phylum_data %>%
+  filter(phylum %in% sig_phyla) %>%
+  mutate(phylum=factor(phylum, levels=sig_phyla)) %>%
+  mutate(agg_rel_abund=agg_rel_abund+1/21000) %>%
+  ggplot(aes(x=phylum, y=agg_rel_abund, color=Sample)) +
+  geom_hline(yintercept=1/10530, color="gray") +
+  geom_boxplot() +
+  scale_color_manual(name=NULL,
+                     values=c("black", "blue"),
+                     breaks=c("High", "Low"),
+                     labels=c("High", "Low")) +
+  labs(title=" phyla  significantly associated with muscle yield genetic line",
+       x=NULL,
+       y="Relative abundance (%)") +
+  scale_y_log10(breaks=c(1e-4, 1e-3, 1e-2, 1e-1, 1), labels=c(1e-2, 1e-1, 1, 10, 100)) +
+  theme_classic()
+
+
+
+
+
+
+
+
+
+
+
+
+write.csv(phylum_tests, file= "Relative_abundance_phylum.csv")
+
+
+
+agg_phylum_data %>%
+  filter(phylum %in% sig_phyla) %>%
+  mutate(phylum=factor(phylum, levels=sig_phyla)) %>%
+  mutate(agg_rel_abund=agg_rel_abund+1/43560) %>%
+  ggplot(aes(x=phylum, y=agg_rel_abund, color=Sample)) +
+  geom_hline(yintercept=1/43560, color="gray") +
+  geom_boxplot() +
+  scale_color_manual(name=NULL,
+                     values=c("Darkgreen", "Orange"),
+                     breaks=c("High", "Low"),
+                     labels=c("High", "Low")) +
+  labs(title="Two phyla are significantly associated with disease progression",
+       x=NULL,
+       y="Relative abundance (%)") +
+  #scale_y_log10(breaks=c(1e-4, 1e-3, 1e-2, 1e-1, 1), labels=c(1e-2, 1e-1, 1, 10, 100)) +
+  theme_classic()
+
+
+
+
+
+
+
+
+
+
+
+#############################  Genus #######
+library(tidyverse)
+library(dplyr)
+library(broom)
+library(purrr)
+
+library(readxl)
+get_metadata <- function() {
+  metadata <- read_csv(file="metadata1.csv")
+  
+  
+}
+taxonomy <- read_tsv(file="191030_muscle_yield.taxonomy")%>%
+  rename_all(tolower)
+
+
+taxonomy %>%
+  mutate(taxonomy=str_replace_all(string=taxonomy, pattern="\\(\\d*\\)", replacement="")) %>%
+  filter(str_detect(taxonomy, pattern="\\(")) %>%
+  select(taxonomy)
+
+
+
+
+
+taxonomy <- read_tsv(file="191030_muscle_yield.taxonomy") %>%
+  rename_all(tolower) %>%
+  mutate(taxonomy=str_replace_all(string=taxonomy, pattern="\\(\\d*\\)", replacement="")) %>%
+  mutate(taxonomy=str_replace_all(string=taxonomy, pattern=";$", replacement="")) %>%
+  separate(taxonomy, into=c("kingdom", "phylum", "class", "order", "family", "genus"), sep=";")
+
+otu_data <- read_csv("subsample_shared_muscle_yield.csv", col_types=cols(Sample=col_character()))%>%
+  pivot_longer(cols=-Sample, names_to="otu", values_to="count")%>%
+  group_by(Sample)%>%
+  summarize(n=sum(count))%>%
+  summary()
+
+otu_data <- read_csv("subsample_shared_muscle_yield.csv", col_types=cols(Sample=col_character()))%>%
+  pivot_longer(cols=-Sample, names_to="otu", values_to="count")%>%
+  group_by(Sample)%>%
+  mutate(rel_abund=count/43560)
+
+
+agg_genus_data <-inner_join(otu_data, taxonomy, by="otu")%>%
+  group_by(Sample, genus)%>%
+  summarize(agg_rel_abund= sum(rel_abund))%>%
+  inner_join(., get_metadata())%>%
+  ungroup()
+
+
+
+top_genus <- agg_genus_data %>%
+  group_by(genus) %>%
+  summarize(median=median(agg_rel_abund)) %>%
+  arrange((desc(median))) %>% # keep this so that the phyla are sorted properly
+  top_n(5, median) %>%
+  pull(genus) # use pull to convert the names from a data frame to a vector of names
+
+
+agg_genus_data %>%
+  filter(genus %in% top_phyla) %>%
+  mutate(genus=factor(genus, levels=top_phyla)) %>%
+  ggplot(aes(x=genus, y=agg_rel_abund, color=Sample)) +
+  geom_boxplot() +
+  scale_color_manual(name=NULL,
+                     values=c("black", "blue"),
+                     breaks=c("High", "Low"),
+                     labels=c("High", "Low")) +
+  labs(title="There are no obvious phylum-level differences between the\ngenetic line",
+       x=NULL,
+       y="Relative abundance") +
+  theme_classic()
+
+
+
+agg_genus_data %>%
+  filter(genus %in% top_genus) %>%
+  mutate(genus=factor(genus, levels=top_genus)) %>%
+  ggplot(aes(x=genus, y=agg_rel_abund, color=Sample)) +
+  geom_boxplot() +
+  scale_color_manual(name=NULL,
+                     values=c("black", "blue"),
+                     breaks=c("High", "Low"),
+                     labels=c("High", "Low")) +
+  labs(title="There are no obvious phylum-level differences between the\ndiagnosis groups",
+       x=NULL,
+       y="Relative abundance") +
+  theme_classic()
+
+
+
+
+
+
+library(broom)
+library(purrr)
+
+genus_tests <- agg_genus_data %>%
+  nest(sample_data = c(-genus)) %>%
+  mutate(test=map(sample_data, ~tidy(kruskal.test(agg_rel_abund~Sample, data=.)))) %>%
+  unnest(test)
+genus_tests <- agg_genus_data %>%
+  nest(sample_data = c(-genus)) %>%
+  mutate(test=map(sample_data, ~tidy(kruskal.test(agg_rel_abund~Sample, data=.)))) %>%
+  unnest(test) %>%
+  mutate(p.value.adj=p.adjust(p.value, method="BH")) %>%
+  arrange(p.value.adj)
+
+sig_genus <- genus_tests %>%
+  filter(p.value.adj <= 0.05) %>%
+  pull(genus)
+
+
+write.csv(genus_tests, file= "Relative_abundance_genus.csv")
+
+
+dev.off()
+
+
+
